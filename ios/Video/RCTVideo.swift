@@ -1,4 +1,5 @@
 import AVFoundation
+import MediaPlayer
 import AVKit
 import Foundation
 #if USE_GOOGLE_IMA
@@ -106,6 +107,16 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
     #if os(iOS)
         private var _pip: RCTPictureInPicture?
     #endif
+    
+    
+    // MARK: custom
+    private var _hasSetupRemoteTransportControl = false
+    private var _hasSetupNowPlaying = false
+    private var _activeForNowPlaying = false
+    private var _title: String?
+    private var _artist: String?
+    private var _artworkUrl: String?
+    private var _loadedArtworkUrl: String?
 
     // Events
     @objc var onVideoLoadStart: RCTDirectEventBlock?
@@ -603,8 +614,8 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
     }
     
     //MARK: Remote Commands & Now Playing
-    func toggleFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
-        print("RCTVideo toggleFromRemote rate: \(player.rate)")
+    @objc func toggleFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        print("RCTVideo toggleFromRemote rate: \(_player?.rate)")
 
         if let onRemoteTriggeredPlayPauseToggle = onRemoteTriggeredPlayPauseToggle {
             onRemoteTriggeredPlayPauseToggle(["target": reactTag])
@@ -614,7 +625,7 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         return .commandFailed
     }
 
-    func playFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+    @objc func playFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         print("RCTVideo playFromRemote")
 
         if let onRemoteTriggeredPlay = onRemoteTriggeredPlay {
@@ -625,7 +636,7 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         return .commandFailed
     }
 
-    func pauseFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+    @objc func pauseFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         print("RCTVideo pauseFromRemote")
 
         if let onRemoteTriggeredPause = onRemoteTriggeredPause {
@@ -636,7 +647,7 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         return .commandFailed
     }
 
-    func stopFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+    @objc func stopFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         print("RCTVideo stopFromRemote rate")
 
         if let onRemoteTriggeredPause = onRemoteTriggeredPause {
@@ -647,7 +658,7 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         return .commandFailed
     }
 
-    func skipForwardFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+    @objc func skipForwardFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         print("RCTVideo skipForwardFromRemote")
 
         if let onRemoteTriggeredSkipForward = onRemoteTriggeredSkipForward {
@@ -657,7 +668,7 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         return .success
     }
 
-    func skipBackwardFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+    @objc func skipBackwardFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         print("RCTVideo skipBackwardFromRemote")
 
         if let onRemoteTriggeredSkipBack = onRemoteTriggeredSkipBack {
@@ -733,10 +744,13 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         if let artist = _artist {
             songInfo[MPMediaItemPropertyArtist] = artist
         }
-
-        let playerRate = Double(player.rate)
-        let playerCurTime = CMTimeGetSeconds(playerItem.currentTime())
-        let playerDuration = CMTimeGetSeconds(playerItem.duration)
+        
+        if(_player == nil || _playerItem == nil) {
+            return;
+        }
+        let playerRate = Double(_player?.rate ?? 0)
+        let playerCurTime = CMTimeGetSeconds(_playerItem?.currentTime() ?? CMTime.zero)
+        let playerDuration = CMTimeGetSeconds(_playerItem?.duration ?? CMTime.zero)
 
         songInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = playerCurTime
         songInfo[MPMediaItemPropertyPlaybackDuration] = playerDuration
@@ -752,6 +766,10 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
     // Update Now Playing Info
     func updateNowPlayingInfo(isPlaying: Bool) {
         guard var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo else {
+            return
+        }
+        
+        guard var playerItem = _playerItem else {
             return
         }
 
@@ -844,18 +862,20 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
 
     // MARK: - Fireside Customization
     func disableVideoTracks() {
-        guard let tracks = playerItem?.tracks else { return }
+        guard let tracks = _playerItem?.tracks else { return }
         for currentTrack in tracks {
-            if currentTrack.assetTrack.hasMediaCharacteristic(.visual) {
+            guard let assetTrack = currentTrack.assetTrack else {return}
+            if assetTrack.hasMediaCharacteristic(.visual) {
                 currentTrack.isEnabled = false
             }
         }
     }
 
     func enableVideoTracks() {
-        guard let tracks = playerItem?.tracks else { return }
+        guard let tracks = _playerItem?.tracks else { return }
         for currentTrack in tracks {
-            if currentTrack.assetTrack.hasMediaCharacteristic(.visual) {
+            guard let assetTrack = currentTrack.assetTrack else {return}
+            if assetTrack.hasMediaCharacteristic(.visual) {
                 currentTrack.isEnabled = true
             }
         }
