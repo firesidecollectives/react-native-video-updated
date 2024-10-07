@@ -968,31 +968,32 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         applyModifiers()
     }
     
-    var title: String? {
+    @objc var title: String? {
         didSet {
             _title = title
         }
     }
 
-    var artist: String? {
+    @objc var artist: String? {
         didSet {
             _artist = artist
         }
     }
 
-    var artworkUrl: String? {
+    @objc var artworkUrl: String? {
         didSet {
             _artworkUrl = artworkUrl
         }
     }
 
-    var activeForNowPlaying: Bool = false {
+    @objc var activeForNowPlaying: Bool = false {
         didSet {
             _activeForNowPlaying = activeForNowPlaying
         }
     }
 
     // Update existing Now Playing info with artwork loaded from artworkUrl
+    @objc
     func updateExistingNowPlayingDataArtwork(_ artworkUrl: String?) {
         guard let artworkUrl = artworkUrl else {
             return
