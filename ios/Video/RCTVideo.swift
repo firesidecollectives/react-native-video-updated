@@ -1,4 +1,5 @@
 import AVFoundation
+import MediaPlayer
 import AVKit
 import Foundation
 #if USE_GOOGLE_IMA
@@ -106,6 +107,16 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
     #if os(iOS)
         private var _pip: RCTPictureInPicture?
     #endif
+    
+    
+    // MARK: custom
+    private var _hasSetupRemoteTransportControl = false
+    private var _hasSetupNowPlaying = false
+    private var _activeForNowPlaying = false
+    private var _title: String?
+    private var _artist: String?
+    private var _artworkUrl: String?
+    private var _loadedArtworkUrl: String?
 
     // Events
     @objc var onVideoLoadStart: RCTDirectEventBlock?
@@ -136,6 +147,12 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
     @objc var onTextTracks: RCTDirectEventBlock?
     @objc var onAudioTracks: RCTDirectEventBlock?
     @objc var onTextTrackDataChanged: RCTDirectEventBlock?
+    @objc var onRemoteTriggeredSkipForward: RCTDirectEventBlock?
+    @objc var onRemoteTriggeredSkipBack: RCTDirectEventBlock?
+    @objc var onRemoteTriggeredPlay: RCTDirectEventBlock?
+    @objc var onRemoteTriggeredPause: RCTDirectEventBlock?
+    @objc var onRemoteTriggeredPlayPauseToggle: RCTDirectEventBlock?
+
 
     @objc
     func _onPictureInPictureEnter() {
@@ -595,6 +612,190 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
 
         DispatchQueue.global(qos: .default).async(execute: initializeSource)
     }
+    
+    //MARK: Remote Commands & Now Playing
+    @objc func toggleFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        print("RCTVideo toggleFromRemote rate: \(_player?.rate)")
+
+        if let onRemoteTriggeredPlayPauseToggle = onRemoteTriggeredPlayPauseToggle {
+            onRemoteTriggeredPlayPauseToggle(["target": reactTag])
+            return .success
+        }
+
+        return .commandFailed
+    }
+
+    @objc func playFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        print("RCTVideo playFromRemote")
+
+        if let onRemoteTriggeredPlay = onRemoteTriggeredPlay {
+            onRemoteTriggeredPlay(["target": reactTag])
+            return .success
+        }
+
+        return .commandFailed
+    }
+
+    @objc func pauseFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        print("RCTVideo pauseFromRemote")
+
+        if let onRemoteTriggeredPause = onRemoteTriggeredPause {
+            onRemoteTriggeredPause(["target": reactTag])
+            return .success
+        }
+
+        return .commandFailed
+    }
+
+    @objc func stopFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        print("RCTVideo stopFromRemote rate")
+
+        if let onRemoteTriggeredPause = onRemoteTriggeredPause {
+            onRemoteTriggeredPause(["target": reactTag])
+            return .success
+        }
+
+        return .commandFailed
+    }
+
+    @objc func skipForwardFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        print("RCTVideo skipForwardFromRemote")
+
+        if let onRemoteTriggeredSkipForward = onRemoteTriggeredSkipForward {
+            onRemoteTriggeredSkipForward(["target": reactTag])
+        }
+
+        return .success
+    }
+
+    @objc func skipBackwardFromRemote(event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        print("RCTVideo skipBackwardFromRemote")
+
+        if let onRemoteTriggeredSkipBack = onRemoteTriggeredSkipBack {
+            onRemoteTriggeredSkipBack(["target": reactTag])
+        }
+
+        return .success
+    }
+
+    // Setup Remote Transport Control
+    func setupRemoteTransportControl() {
+        guard !_hasSetupRemoteTransportControl, _activeForNowPlaying else {
+            return
+        }
+
+        print("RCTVideo setupRemoteTransportControl")
+        let commandCenter = MPRemoteCommandCenter.shared()
+
+        commandCenter.playCommand.addTarget(self, action: #selector(playFromRemote(event:)))
+        commandCenter.pauseCommand.addTarget(self, action: #selector(pauseFromRemote(event:)))
+        commandCenter.togglePlayPauseCommand.addTarget(self, action: #selector(toggleFromRemote(event:)))
+        commandCenter.stopCommand.addTarget(self, action: #selector(stopFromRemote(event:)))
+
+        if onRemoteTriggeredSkipForward != nil && onRemoteTriggeredSkipBack != nil {
+            commandCenter.skipBackwardCommand.addTarget(self, action: #selector(skipBackwardFromRemote(event:)))
+            commandCenter.skipForwardCommand.addTarget(self, action: #selector(skipForwardFromRemote(event:)))
+        }
+
+        _hasSetupRemoteTransportControl = true
+    }
+
+    // Cleanup Remote Transport Control
+    func cleanupRemoteTransportControl() {
+        guard _hasSetupRemoteTransportControl else {
+            return
+        }
+
+        print("RCTVideo cleanupRemoteTransportControl, _playInBackground: \(_playInBackground)")
+        let commandCenter = MPRemoteCommandCenter.shared()
+
+        commandCenter.playCommand.removeTarget(nil)
+        commandCenter.pauseCommand.removeTarget(nil)
+        commandCenter.togglePlayPauseCommand.removeTarget(nil)
+        commandCenter.stopCommand.removeTarget(nil)
+        commandCenter.skipBackwardCommand.removeTarget(nil)
+        commandCenter.skipForwardCommand.removeTarget(nil)
+
+        _hasSetupRemoteTransportControl = false
+    }
+
+    // Cleanup Now Playing Info
+    func cleanupNowPlaying() {
+        guard _activeForNowPlaying else {
+            return
+        }
+
+        print("RCTVideo cleanupNowPlaying, _playInBackground: \(_playInBackground)")
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = [:]
+    }
+
+    // Setup Now Playing Info
+    func setupNowPlaying() {
+        guard !_hasSetupNowPlaying, _activeForNowPlaying else {
+            return
+        }
+
+        print("RCTVideo setupNowPlaying, _playInBackground: \(_playInBackground)")
+        let playingInfoCenter = MPNowPlayingInfoCenter.default()
+
+        var songInfo = playingInfoCenter.nowPlayingInfo ?? [String: Any]()
+
+        songInfo[MPMediaItemPropertyTitle] = _title
+        if let artist = _artist {
+            songInfo[MPMediaItemPropertyArtist] = artist
+        }
+        
+        if(_player == nil || _playerItem == nil) {
+            return;
+        }
+        let playerRate = Double(_player?.rate ?? 0)
+        let playerCurTime = CMTimeGetSeconds(_playerItem?.currentTime() ?? CMTime.zero)
+        let playerDuration = CMTimeGetSeconds(_playerItem?.duration ?? CMTime.zero)
+
+        songInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = playerCurTime
+        songInfo[MPMediaItemPropertyPlaybackDuration] = playerDuration
+        songInfo[MPNowPlayingInfoPropertyPlaybackRate] = playerRate
+
+        playingInfoCenter.nowPlayingInfo = songInfo
+
+        updateExistingNowPlayingDataArtwork(artworkUrl)
+
+        _hasSetupNowPlaying = true
+    }
+
+    // Update Now Playing Info
+    func updateNowPlayingInfo(isPlaying: Bool) {
+        guard var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo else {
+            return
+        }
+        
+        guard var playerItem = _playerItem else {
+            return
+        }
+
+        let playerCurTime = CMTimeGetSeconds(playerItem.currentTime())
+        let playerDuration = CMTimeGetSeconds(playerItem.duration)
+
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = playerCurTime
+        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+
+        if #available(iOS 10.0, *) {
+            nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackProgress] = playerDuration
+        }
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+    }
+
+    // Update Playback State
+    func updatePlaybackState(isPlaying: Bool) {
+        updateNowPlayingInfo(isPlaying: isPlaying)
+
+        let commandCenter = MPRemoteCommandCenter.shared()
+        commandCenter.playCommand.isEnabled = !isPlaying
+        commandCenter.pauseCommand.isEnabled = isPlaying
+    }
+    
+    
 
     func playerItemPrepareText(source: VideoSource, asset: AVAsset!, assetOptions: NSDictionary?, uri: String) async -> AVPlayerItem {
         if source.textTracks.isEmpty == true || uri.hasSuffix(".m3u8") {
@@ -659,6 +860,27 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         return playerItem
     }
 
+    // MARK: - Fireside Customization
+    func disableVideoTracks() {
+        guard let tracks = _playerItem?.tracks else { return }
+        for currentTrack in tracks {
+            guard let assetTrack = currentTrack.assetTrack else {return}
+            if assetTrack.hasMediaCharacteristic(.visual) {
+                currentTrack.isEnabled = false
+            }
+        }
+    }
+
+    func enableVideoTracks() {
+        guard let tracks = _playerItem?.tracks else { return }
+        for currentTrack in tracks {
+            guard let assetTrack = currentTrack.assetTrack else {return}
+            if assetTrack.hasMediaCharacteristic(.visual) {
+                currentTrack.isEnabled = true
+            }
+        }
+    }
+    
     // MARK: - Prop setters
 
     @objc
@@ -745,6 +967,81 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
         RCTPlayerOperations.configureAudio(ignoreSilentSwitch: _ignoreSilentSwitch, mixWithOthers: _mixWithOthers, audioOutput: _audioOutput)
         applyModifiers()
     }
+    
+    @objc var title: String? {
+        didSet {
+            _title = title
+        }
+    }
+
+    @objc var artist: String? {
+        didSet {
+            _artist = artist
+        }
+    }
+
+    @objc var artworkUrl: String? {
+        didSet {
+            _artworkUrl = artworkUrl
+        }
+    }
+
+    @objc var activeForNowPlaying: Bool = false {
+        didSet {
+            _activeForNowPlaying = activeForNowPlaying
+        }
+    }
+
+    // Update existing Now Playing info with artwork loaded from artworkUrl
+    @objc
+    func updateExistingNowPlayingDataArtwork(_ artworkUrl: String?) {
+        guard let artworkUrl = artworkUrl else {
+            return
+        }
+
+        let center = MPNowPlayingInfoCenter.default()
+        if _loadedArtworkUrl == _artworkUrl, center.nowPlayingInfo?[MPMediaItemPropertyArtwork] != nil {
+            return
+        }
+
+        _loadedArtworkUrl = artworkUrl
+
+        // Custom handling of artwork in another thread, loaded asynchronously
+        DispatchQueue.global(qos: .background).async {
+            var image: UIImage? = nil
+
+            if artworkUrl.isEmpty {
+                return
+            }
+
+            if artworkUrl.hasPrefix("http://") || artworkUrl.hasPrefix("https://") {
+                if let imageURL = URL(string: artworkUrl), let imageData = try? Data(contentsOf: imageURL) {
+                    image = UIImage(data: imageData)
+                }
+            } else {
+                let localArtworkUrl = artworkUrl.replacingOccurrences(of: "file://", with: "")
+                if FileManager.default.fileExists(atPath: localArtworkUrl) {
+                    image = UIImage(named: localArtworkUrl)
+                }
+            }
+
+            guard let finalImage = image, finalImage.cgImage != nil || finalImage.ciImage != nil else {
+                return
+            }
+
+            DispatchQueue.main.async {
+                if artworkUrl != self._artworkUrl {
+                    return
+                }
+
+                let center = MPNowPlayingInfoCenter.default()
+                let artwork = MPMediaItemArtwork(boundsSize: finalImage.size) { _ in finalImage }
+                var mediaDict = center.nowPlayingInfo ?? [:]
+                mediaDict[MPMediaItemPropertyArtwork] = artwork
+                center.nowPlayingInfo = mediaDict
+            }
+        }
+    }
 
     @objc
     func setMixWithOthers(_ mixWithOthers: String?) {
@@ -764,6 +1061,20 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
                 _player?.rate = 0.0
             }
         } else {
+            
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try session.setCategory(.playback)
+                
+                if _playInBackground {
+                    try session.setMode(.moviePlayback)
+                } else {
+                    try session.setMode(.default)
+                }
+            } catch {
+                print("Failed to set audio session category/mode: \(error)")
+            }
+            
             RCTPlayerOperations.configureAudio(ignoreSilentSwitch: _ignoreSilentSwitch, mixWithOthers: _mixWithOthers, audioOutput: _audioOutput)
 
             if _adPlaying {
@@ -779,8 +1090,14 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
                 }
                 _player?.rate = _rate
             }
+            
+            // First time we start playing these will be run
+            setupNowPlaying()
+            setupRemoteTransportControl()
         }
 
+        // Update lock screen controls state every time play/pause is toggled
+        updatePlaybackState(isPlaying: !paused)
         _paused = paused
     }
 
@@ -1023,7 +1340,7 @@ class RCTVideo: UIView, RCTVideoPlayerViewControllerDelegate, RCTPlayerObserverH
                     viewController.present(playerViewController, animated: true, completion: { [weak self] in
                         guard let self else { return }
                         // In fullscreen we must display controls
-                        self._playerViewController?.showsPlaybackControls = true
+                        self._playerViewController?.showsPlaybackControls = false
                         self._fullscreenPlayerPresented = fullscreen
                         self._playerViewController?.autorotate = self._fullscreenAutorotate
 
